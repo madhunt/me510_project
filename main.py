@@ -5,6 +5,8 @@ import matplotlib.pyplot as plt
 import os
 import pandas as pd
 
+import utils
+
 def main():
 
     # define paths to data and to save figures
@@ -20,18 +22,123 @@ def main():
     params_init = [3.9, 1.91, 1.49, 0.0029, 11, 1191, 0.064, 11.7]
 
     # (1) compare experimental data with initial parameters
-    #TODO need to do
+    #initial_params_plot(path_data, path_fig, temp_list, params_init, strain_rate)
 
     # (2) optimize parameters for experimental data
-    #TODO clean up code
-    #optimize_params()
+    #optimize_params_dsgz(path_data, path_fig, temp_list, params_init, strain_rate)
 
     # (3) compare parameters for different temperatures
     #compare_params(path_data, path_fig, temp_list)
 
-    # (4)
+    # (4) sensitivity study for 20 and 180 C
+    #sensitivity_study(path_data, path_fig, strain_rate)
+
+    # (5) compare to other models
+    params_jc = [132, 10, 0.034, 1.2, 0.7]          # Garcia-Gonzolez 2015
+    optimize_params_other(path_data, path_fig, temp_list, params_jc, strain_rate, 
+                          model_name=utils.johnson_cook_model, model_str="Johnson-Cook")
+    params_gj = [141.1, 1.27, 28.27, 24.2, 0.015]   # Trufasu 2014
+    optimize_params_other(path_data, path_fig, temp_list, params_gj, strain_rate, 
+                          model_name=utils.gsell_jonas_model, model_str="G'Sell-Jonas")
 
     return
+
+def optimize_params_other(path_data, path_fig, temp_list, params_init, strain_rate, model_name, model_str):
+
+    # initialize plot
+    fig, ax = plt.subplots(1, 1)
+    colors = plt.cm.rainbow_r(np.linspace(0, 1, len(temp_list)))
+    
+    # loop through all temperatures
+    for i, temp in enumerate(temp_list):
+        # load in data for given temp
+        path_file = os.path.join(path_data, f"stress_strain_{temp}C.csv")
+        data = pd.read_csv(path_file, names=["Strain", "Stress", ""])
+        strain = data["Strain"]
+        stress_exp = data["Stress"]
+
+        # calculate absolute temperature (K)
+        temp_abs = utils.celcius_to_kelvin(temp)
+
+        # use gradient-descent to find optimal parameter values for this temp
+        result = sci.optimize.minimize(utils.rmse_cost_func,
+                                    x0=params_init,
+                                    args=(strain, strain_rate, temp_abs, stress_exp, model_name))
+        # add result to plot
+        stress_model = model_name(strain, strain_rate, temp_abs, result.x)
+        rmse = result.fun
+        ax.plot(strain, stress_exp, "o", color=colors[i])
+        ax.annotate(f"{temp} C, RMSE={np.round(rmse, 2)}", 
+                    [0.063, max(stress_exp)], annotation_clip=False)
+        ax.plot(strain, stress_model, "-", color=colors[i], label=f"{temp} C, RMSE = {np.round(rmse, 2)}")
+
+        print(result)
+
+    ax.set_xlabel("True Strain $\epsilon$")
+    ax.set_ylabel("True Stress $\sigma$ [MPa]")
+    fig.suptitle(f"Polyetheretherketone Stress-Strain Curves Fit with {model_str} Model,\n(Strain Rate = {strain_rate:.2E} $1/s$)")
+    ax.grid(True)
+    fig.tight_layout()
+    plt.savefig(os.path.join(path_fig, f"stage3_optimize_params_{model_str}.png"), dpi=500)
+
+    return
+
+
+
+def sensitivity_study(path_data, path_fig, strain_rate):
+    # load in parameters
+    path_params = os.path.join(path_data, "params_optimized.csv")
+    params_all = pd.read_csv(path_params)
+
+    # initialize figure
+    fig, ax = plt.subplots(ncols=2, nrows=4, tight_layout=True,
+                           sharex=True, figsize=[12,12])
+    colors = ['red', 'purple']
+    for j, temp in enumerate([20, 180]):
+        # calculate best fit model
+        temp_abs = utils.celcius_to_kelvin(temp)
+        strain = np.arange(0, 0.06, 0.001)
+        params = params_all[str(temp)]
+        model_best = utils.dsgz_model(strain, strain_rate, temp_abs, params)
+
+        # loop through each parameter
+        for i in params.index:
+            axi = ax.flatten()[i]
+            # plot best fit model
+            axi.plot(strain, model_best, "-", color=colors[j],
+                     label=f"{temp} C Best Fit")
+            # calculate and plot upper bound
+            params_high = params.copy()
+            params_high[i] = params[i] + 0.5*params[i]
+            model_high = utils.dsgz_model(strain, strain_rate, temp_abs, params_high)
+            axi.plot(strain, model_high, "--", color=colors[j],
+                     label="$\pm$50%")
+            # calculate and plot lower bound
+            params_low = params.copy()
+            params_low[i] = params[i] - 0.5*params[i]
+            model_low = utils.dsgz_model(strain, strain_rate, temp_abs, params_low)
+            axi.plot(strain, model_low, "--", color=colors[j])
+
+            # set axis title
+            axi.set_title(params_all.iloc[i]["Unnamed: 0"], fontsize=16)
+            axi.legend(loc="upper left")
+
+            # set axis bounds to neaten figure
+            if i == 5:
+                axi.set_ylim([-10, 530])
+            else:
+                axi.set_ylim([-5, 180])
+            # set labels to neaten figure
+            if i == 6 or i == 7:
+                axi.set_xlabel("True Strain $\epsilon$")
+            if i in [0, 2, 4, 6]:
+                axi.set_ylabel("True Stress $\sigma$ [MPa]")
+
+
+    fig.suptitle("Sensitivity Study for DSGZ Model Parameters", fontsize=18)
+    plt.savefig(os.path.join(path_fig, f"stage3_sensitivity.png"), dpi=500)
+    return
+
 
 def compare_params(path_data, path_fig, temp_list):
     path_params = os.path.join(path_data, "params_optimized.csv")
@@ -41,13 +148,11 @@ def compare_params(path_data, path_fig, temp_list):
     fig, ax = plt.subplots(ncols=1, nrows=len(params_all.index), 
                            tight_layout=True, sharex=True, sharey=True,
                            figsize=[8,12])
-    colors = plt.cm.rainbow_r(np.linspace(0, 1, len(temp_list)))
     for i in params_all.index:
         param_vals = params_all.iloc[i][1:].to_numpy()
         param_mean = np.mean(param_vals)
         param_norm = param_vals/param_mean
-        ax[i].plot(temp_list, param_norm, "o-", color='red',
-                label=params_all.iloc[i]["Parameter"])
+        ax[i].plot(temp_list, param_norm, "o-", color='red')
         ax[i].set_ylabel(params_all.iloc[i]["Parameter"],
                          rotation=0, fontsize=16)
         ax[i].xaxis.grid(True)
@@ -58,7 +163,7 @@ def compare_params(path_data, path_fig, temp_list):
     return
 
 
-def optimize_params(path_data, path_fig):
+def optimize_params_dsgz(path_data, path_fig, temp_list, params_init, strain_rate):
 
     # initialize array to hold all parameters
     params_all = pd.DataFrame(index=["K", "C1", "C2", "C3", "C4", "a", "m", "alpha"], 
@@ -76,16 +181,16 @@ def optimize_params(path_data, path_fig):
         stress_exp = data["Stress"]
 
         # find absolute temp (in K)
-        temp_abs = celcius_to_kelvin(temp)
+        temp_abs = utils.celcius_to_kelvin(temp)
 
         # use gradient-descent to find optimal parameter values for this temp
-        result = sci.optimize.minimize(rmse_cost_func,
+        result = sci.optimize.minimize(utils.rmse_cost_func,
                                     x0=params_init,
-                                    args=(strain, strain_rate, temp_abs, stress_exp, dsgz_model))
+                                    args=(strain, strain_rate, temp_abs, stress_exp, utils.dsgz_model))
         params_all[temp] = result.x
 
         # add result to plot
-        stress_model = dsgz_model(strain, strain_rate, temp_abs, result.x)
+        stress_model = utils.dsgz_model(strain, strain_rate, temp_abs, result.x)
         rmse = result.fun
         ax.plot(strain, stress_exp, "o", color=colors[i])
         ax.annotate(f"{temp} C, RMSE={np.round(rmse, 2)}", 
@@ -97,141 +202,47 @@ def optimize_params(path_data, path_fig):
     fig.suptitle(f"Polyetheretherketone Stress-Strain Curves Fit with DSGZ,\n(Strain Rate = {strain_rate:.2E} $1/s$)")
     ax.grid(True)
     fig.tight_layout()
-    plt.savefig(os.path.join(path_fig, f"stage3_optimize_params.png"), dpi=500)
+    plt.savefig(os.path.join(path_fig, f"stage3_optimize_params_dsgz.png"), dpi=500)
 
     # save parameters
     path_params = os.path.join(path_data, "params_optimized.csv")
+    params_all = params_all.rename(columns={"Unnamed: 0": "Parameter"})
     params_all.to_csv(path_params)
     return
 
 
 
-    #####################################################
-    # STAGE 2
-    #####################################################
-    # Drozdov 2021 parameters
-    paper_str = "Drozdov et. al., 2021"
-    fig_str = "drozdov_2021"
-    # use parameters from Duan 2001
-    params = [3.9, 1.91, 1.49, 0.0029, 11, 1191, 0.064, 11.7]
-    temp_list = [20, 80, 120, 130, 140, 150, 160, 170, 180]
-    strain = np.arange(0.001, 0.06, 0.001)
-    strain_rate = 3.1e-3
-
-
-
-
+def initial_params_plot(path_data, path_fig, temp_list, params_init, strain_rate):
     # initialize plot
-    fig, ax = plt.subplots(1, 1, tight_layout=True)
-    colors = plt.cm.rainbow(np.linspace(0, 1, len(temp)))
-
+    fig, ax = plt.subplots(1, 1)
+    colors = plt.cm.rainbow_r(np.linspace(0, 1, len(temp_list)))
+    
+    # loop through all temperatures
     for i, temp in enumerate(temp_list):
         # load in data for given temp
-        path_file = os.path.join(path_data, f"stress_strain_{T}C.csv")
+        path_file = os.path.join(path_data, f"stress_strain_{temp}C.csv")
         data = pd.read_csv(path_file, names=["Strain", "Stress", ""])
-        ax.plot(data["Strain"], data["Stress"], "o", color=colors[i])
+        strain = data["Strain"]
+        stress_exp = data["Stress"]
 
-        # find absolute temp (in Kelvin)
-        temp_abs = celcius_to_kelvin(temp)
-        stress_model = dsgz_model(strain, strain_rate, T_K,
-                                          params)
-        ax.plot(strain, stress_model, color=colors[i], label=f"{T} C")
+        # find absolute temp (in K)
+        temp_abs = utils.celcius_to_kelvin(temp)
+
+        # calculate stress model with initial params
+        stress_model = utils.dsgz_model(strain, strain_rate, temp_abs, params_init)
+        rmse = utils.calc_rmse(stress_model, stress_exp)
+        ax.plot(strain, stress_exp, "o", color=colors[i])
+        ax.annotate(f"{temp} C, RMSE={np.round(rmse, 2)}", 
+                    [0.063, max(stress_exp)], annotation_clip=False)
+        ax.plot(strain, stress_model, "-", color=colors[i], label=f"{temp} C, RMSE = {np.round(rmse, 2)}")
+
     ax.set_xlabel("True Strain $\epsilon$")
     ax.set_ylabel("True Stress $\sigma$ [MPa]")
-    ax.legend(title=f"{strain_rate:.2E} $1/s$")
+    fig.suptitle(f"Initial Parameters for DSGZ Model,\n(Strain Rate = {strain_rate:.2E} $1/s$)")
     ax.grid(True)
-    #ax.set_ylim([0, 80])
-    fig.suptitle(f"Replicated Stress-Strain Curves from {paper_str}")
-    plt.savefig(os.path.join(path_fig, f"testing_{fig_str}.png"))
-        
-
-
+    fig.tight_layout()
+    plt.savefig(os.path.join(path_fig, f"stage2_initial_params.png"), dpi=500)
     return
-
-def celcius_to_kelvin(temp):
-    return temp + 273.15
-def kelvin_to_celcius(temp):
-    return temp - 273.15
-
-
-
-
-
-def rmse_cost_func(params, strain, strain_rate, temp, stress_exp, model_func):
-    #TODO CHENAGE DOCS
-    """
-    Calculates RMSE for a given model. To use when optimizing parameters.
-    INPUTS
-        params      : list of float : List of parameters for chosen model, size 1xp.
-        x           : np array      : Array of x-values, size 1xN.
-        y_exp       : np array      : Array of experimental y-values, size 1xN.
-        model_func  : func handle   : Name of chosen model function.
-    RETURNS 
-        rmse        : float         : Root Mean Square Error calculated for given model and parameters.
-    """
-    y_model = model_func(strain, strain_rate, temp, params)
-    rmse = calc_rmse(y_model, stress_exp)
-    return rmse
-
-
-def calc_rmse(y_model, y_exp):
-    """
-    Calculates Root Mean Square Error.
-    INPUTS
-        y_model : np array  : Modeled y-values, size 1/N.
-        y_exp   : np array  : Experimental y-values, size 1xN.
-    RETURNS
-        rmse    : float     : RMSE of model to experimental values.
-    """
-    assert len(y_model) == len(y_exp)
-    N = len(y_exp)
-    rmse = np.sqrt(1/N * np.sum((y_model - y_exp)**2))
-    return rmse
-
-
-def johnson_cook_model(strain, strain_rate, hom_temp, params):
-
-    C1 = params[0]
-    C2 = params[1]
-    C3 = params[2]
-    N = params[3]
-    M = params[4]
-
-
-    term1 = C1 + C2 * strain**N
-    term2 = 1 + C3 * np.log(strain_rate)
-    term3 = 1 - hom_temp**M
-
-    stress_model = term1 * term2 * term3
-
-    return stress_model
-
-def dsgz_model(strain, strain_rate, temp_abs, params):
-    # define 8 model parameters
-    K = params[0]
-    C1 = params[1]
-    C2 = params[2]
-    C3 = params[3]
-    C4 = params[4]
-    a = params[5]
-    m = params[6]
-    alpha = params[7]
-
-    # calculate f(strain); initial elastic and strain hardening
-    f = (np.exp(-C1 * strain) + strain**(C2)) * (1 - np.exp(-alpha*strain))
-    # calculate h(strain_rate, temp)
-    h = strain_rate**m * np.exp(a/temp_abs)
-    # calculate stress model
-    yield_behavior = (strain * np.exp(1 - strain/(C3 * h))) / (C3 * h)
-
-
-    stress_model = K * h * (f + np.exp(strain*(np.log(h)-C4)) * (yield_behavior - f))
-
-    return stress_model
-
-
-
-
 
 
 if __name__ == "__main__":
