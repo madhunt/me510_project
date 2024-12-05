@@ -12,11 +12,11 @@ def main():
     path_fig = os.path.join(path_home, "figures")
     path_data = os.path.join(path_home, "data")
 
-    # define parameters from Drozdov, et. al. 2021 experiment
+    # define parameters from Drozdov et. al., 2021 experiment
     temp_list = [20, 80, 120, 130, 140, 150, 160, 170, 180]
     strain_rate = 3.1e-3
 
-    # use initial parameters from Duan, et. al. 2001
+    # use initial parameters from Duan et. al., 2001
     params_init = [3.9, 1.91, 1.49, 0.0029, 11, 1191, 0.064, 11.7]
 
     # (1) compare experimental data with initial parameters
@@ -234,7 +234,6 @@ def optimize_params_other(path_data, path_fig, temp_list, params_init, strain_ra
     ax.grid(True)
     fig.tight_layout()
     plt.savefig(os.path.join(path_fig, f"stage3_optimize_params_{model_str}.png"), dpi=500)
-
     return
 
 
